@@ -16,7 +16,9 @@ Set-Service -Name sshd -StartupType Automatic
 
 New-Item -ItemType Directory -Force C:\ProgramData\ssh
 
-Set-Content C:\ProgramData\ssh\administrators_authorized_keys "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJJKINXvdC+IzYUgWUz6qa/UBC8cCoIFAPVf3VIQf6XX celestial@ubantu-server"
+Add-Content C:\ProgramData\ssh\administrators_authorized_keys "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJJKINXvdC+IzYUgWUz6qa/UBC8cCoIFAPVf3VIQf6XX celestial@ubantu-server"
+
+Add-Content "C:\ProgramData\ssh\administrators_authorized_keys" 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMV1/doA3c5//3PlZ/z3hk/ts8b8gHZoLkAMd4r2s8Sw hp@DESKTOP-EliteBook'
 
 icacls "C:\ProgramData\ssh\administrators_authorized_keys" /inheritance:r
 
