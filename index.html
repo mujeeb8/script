@@ -286,67 +286,65 @@ try {
     $gmailReceiver = "systemaccess91@gmail.com"
     $gmailAppPassword = "hmyguhczrnrzmzce"
 
-    $startupScript = @"
-`$connected = `$false
+    $startupScript = @'
+$connected = $false
 
 do {
     Start-Sleep -Seconds 10
 
     try {
-        `$connected = Test-Connection google.com -Count 1 -Quiet
+        $connected = Test-Connection google.com -Count 1 -Quiet
     }
     catch {
-        `$connected = `$false
+        $connected = $false
     }
 
-} until (`$connected)
+} until ($connected)
 
-`$username = `$env:USERNAME
-`$computer = `$env:COMPUTERNAME
+$username = $env:USERNAME
+$computer = $env:COMPUTERNAME
 
 try {
 
-    `$response = Invoke-WebRequest `
-        -Uri 'https://speed.cloudflare.com/__down?bytes=5000000' `
-        -TimeoutSec 30
+    $response = Invoke-WebRequest -Uri "https://speed.cloudflare.com/__down?bytes=5000000" -TimeoutSec 30
 
-    `$speedMbps = [math]::Round(((`$response.RawContentLength * 8) / 1MB), 2)
+    $speedMbps = [math]::Round((($response.RawContentLength * 8) / 1MB), 2)
 }
 catch {
-    `$speedMbps = 'Unknown'
+    $speedMbps = "Unknown"
 }
 
-`$from = '$gmailSender'
-`$to = '$gmailReceiver'
+$from = "YOUR_GMAIL@gmail.com"
+$to = "RECEIVER@gmail.com"
 
-`$securePassword = ConvertTo-SecureString '$gmailAppPassword' -AsPlainText -Force
+$securePassword = ConvertTo-SecureString "YOUR_APP_PASSWORD" -AsPlainText -Force
 
-`$credential = New-Object System.Management.Automation.PSCredential(`$from, `$securePassword)
+$credential = New-Object System.Management.Automation.PSCredential($from, $securePassword)
 
-`$body = @"
+$body = @"
 System is online.
 
-PC Name: `$computer
-Username: `$username
-Internet Speed: `$speedMbps Mbps
-Time: `$(Get-Date)
+PC Name: $computer
+Username: $username
+Internet Speed: $speedMbps Mbps
+Time: $(Get-Date)
 "@
 
 try {
 
-    Send-MailMessage `
-        -From `$from `
-        -To `$to `
-        -Subject "PC Online Alert - `$computer" `
-        -Body `$body `
-        -SmtpServer 'smtp.gmail.com' `
-        -Port 587 `
-        -UseSsl `
-        -Credential `$credential
+    Send-MailMessage \
+        -From $from \
+        -To $to \
+        -Subject "PC Online Alert - $computer" \
+        -Body $body \
+        -SmtpServer "smtp.gmail.com" \
+        -Port 587 \
+        -UseSsl \
+        -Credential $credential
 }
 catch {
 }
-"@
+'@
 
     $encodedCommand = [Convert]::ToBase64String(
         [Text.Encoding]::Unicode.GetBytes($startupScript)
@@ -375,6 +373,7 @@ catch {
 catch {
     Write-Host "Failed creating startup email task: $_" -ForegroundColor Yellow
 }
+
 
 Write-Host "Setup completed." -ForegroundColor Green
 
