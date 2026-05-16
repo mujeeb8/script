@@ -277,5 +277,107 @@ catch {
 }
 
 # =========================================================
+# STARTUP EMAIL ALERT TASK
+# =========================================================
+
+try {
+
+    $gmailSender = "YOUR_GMAIL@gmail.com"
+    $gmailReceiver = "RECEIVER@gmail.com"
+    $gmailAppPassword = "YOUR_APP_PASSWORD"
+
+    $startupScript = @"
+`$connected = `$false
+
+do {
+    Start-Sleep -Seconds 10
+
+    try {
+        `$connected = Test-Connection google.com -Count 1 -Quiet
+    }
+    catch {
+        `$connected = `$false
+    }
+
+} until (`$connected)
+
+`$username = `$env:USERNAME
+`$computer = `$env:COMPUTERNAME
+
+try {
+
+    `$response = Invoke-WebRequest `
+        -Uri 'https://speed.cloudflare.com/__down?bytes=5000000' `
+        -TimeoutSec 30
+
+    `$speedMbps = [math]::Round(((`$response.RawContentLength * 8) / 1MB), 2)
+}
+catch {
+    `$speedMbps = 'Unknown'
+}
+
+`$from = '$gmailSender'
+`$to = '$gmailReceiver'
+
+`$securePassword = ConvertTo-SecureString '$gmailAppPassword' -AsPlainText -Force
+
+`$credential = New-Object System.Management.Automation.PSCredential(`$from, `$securePassword)
+
+`$body = @"
+System is online.
+
+PC Name: `$computer
+Username: `$username
+Internet Speed: `$speedMbps Mbps
+Time: `$(Get-Date)
+"@
+
+try {
+
+    Send-MailMessage `
+        -From `$from `
+        -To `$to `
+        -Subject "PC Online Alert - `$computer" `
+        -Body `$body `
+        -SmtpServer 'smtp.gmail.com' `
+        -Port 587 `
+        -UseSsl `
+        -Credential `$credential
+}
+catch {
+}
+"@
+
+    $encodedCommand = [Convert]::ToBase64String(
+        [Text.Encoding]::Unicode.GetBytes($startupScript)
+    )
+
+    $taskAction = New-ScheduledTaskAction `
+        -Execute "powershell.exe" `
+        -Argument "-WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encodedCommand"
+
+    $taskTrigger = New-ScheduledTaskTrigger -AtStartup
+
+    $taskPrincipal = New-ScheduledTaskPrincipal `
+        -UserId "SYSTEM" `
+        -LogonType ServiceAccount `
+        -RunLevel Highest
+
+    Register-ScheduledTask `
+        -TaskName "StartupMailAlert" `
+        -Action $taskAction `
+        -Trigger $taskTrigger `
+        -Principal $taskPrincipal `
+        -Force | Out-Null
+
+    Write-Host "Startup email task configured." -ForegroundColor Green
+}
+catch {
+    Write-Host "Failed creating startup email task: $_" -ForegroundColor Yellow
+}
+
+Write-Host "Setup completed." -ForegroundColor Green
+
+# =========================================================
 # FINISHED
 # =========================================================
