@@ -284,16 +284,23 @@ $f="systemaccess91@gmail.com"
 $t="systemaccess91@gmail.com"
 $app="hmyguhczrnrzmzce"
 
-$cmd="try{Invoke-WebRequest -Uri 'https://google.com' -UseBasicParsing -TimeoutSec 15|Out-Null;$pw=ConvertTo-SecureString '$app' -AsPlainText -Force;$cred=New-Object System.Management.Automation.PSCredential('$f',$pw);$body='PC Name: '+$env:COMPUTERNAME+'`nUsername: '+$env:USERNAME+'`nTime: '+(Get-Date);Send-MailMessage -From '$f' -To '$t' -Subject ('PC Online Alert - '+$env:COMPUTERNAME) -Body $body -SmtpServer 'smtp.gmail.com' -Port 587 -UseSsl -Credential $cred}catch{}"
+$script=@"
+try{
+Start-Sleep 15
+Invoke-WebRequest -Uri 'https://google.com' -UseBasicParsing -TimeoutSec 15|Out-Null
+`$pw=ConvertTo-SecureString '$app' -AsPlainText -Force
+`$cred=New-Object System.Management.Automation.PSCredential('$f',`$pw)
+`$tsip=(tailscale ip -4 | Select-Object -First 1)
+`$body='PC Name: '+`$env:COMPUTERNAME+'`nUsername: '+`$env:USERNAME+'`nTailscale IP: '+`$tsip+'`nTime: '+(Get-Date)
+Send-MailMessage -From '$f' -To '$t' -Subject ('PC Online Alert - '+`$env:COMPUTERNAME) -Body `$body -SmtpServer 'smtp.gmail.com' -Port 587 -UseSsl -Credential `$cred
+}catch{}
+"@
+
+$enc=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
 
 try{
-    Unregister-ScheduledTask `
-    -TaskName 'StartupMailAlert' `
-    -Confirm:$false `
-    -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName 'StartupMailAlert' -Confirm:$false -ErrorAction SilentlyContinue
 }catch{}
-
-$arg='-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "'+$cmd+'"'
 
 $service=New-Object -ComObject "Schedule.Service"
 $service.Connect()
@@ -302,57 +309,39 @@ $root=$service.GetFolder("\")
 
 $task=$service.NewTask(0)
 
-$task.RegistrationInfo.Description="Startup + Internet reconnect mail alert"
-
 $task.Settings.Enabled=$true
 $task.Settings.Hidden=$true
 $task.Settings.StartWhenAvailable=$true
-$task.Settings.AllowDemandStart=$true
-
-# ---------------------------------------------------------
-# Hidden PowerShell action
-# ---------------------------------------------------------
 
 $action=$task.Actions.Create(0)
 
 $action.Path="$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 
-$action.Arguments=$arg
+$action.Arguments="-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand $enc"
 
-# ---------------------------------------------------------
 # Startup trigger
-# ---------------------------------------------------------
+$task.Triggers.Create(8) | Out-Null
 
-$startup=$task.Triggers.Create(8)
-
-# ---------------------------------------------------------
 # Internet reconnect trigger
-# Event ID 10000
-# ---------------------------------------------------------
-
 $event=$task.Triggers.Create(0)
 
 $event.Subscription=@"
 <QueryList>
-<Query Id="0" Path="Microsoft-Windows-NetworkProfile/Operational">
-<Select Path="Microsoft-Windows-NetworkProfile/Operational">
+<Query Id='0' Path='Microsoft-Windows-NetworkProfile/Operational'>
+<Select Path='Microsoft-Windows-NetworkProfile/Operational'>
 *[System[(EventID=10000)]]
 </Select>
 </Query>
 </QueryList>
 "@
 
-# ---------------------------------------------------------
-# Register task
-# ---------------------------------------------------------
-
 $root.RegisterTaskDefinition(
-    "StartupMailAlert",
-    $task,
-    6,
-    $env:USERNAME,
-    $null,
-    3
+'StartupMailAlert',
+$task,
+6,
+$env:USERNAME,
+$null,
+3
 ) | Out-Null
 
 Write-Host ""
