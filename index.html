@@ -96,10 +96,19 @@ if (Get-Service Tailscale -ErrorAction SilentlyContinue) {
     Start-Sleep -Seconds 5
 
     try {
-        tailscale up --authkey=$TAILSCALE_AUTHKEY
+    tailscale up --authkey=$TAILSCALE_AUTHKEY -ErrorAction Stop
     }
     catch {
-        Write-Host "tailscale up failed: $_" -ForegroundColor Yellow
+        Write-Host "tailscale command failed, trying direct executable..." -ForegroundColor Yellow
+    
+        $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
+    
+        if (Test-Path $ts) {
+            & $ts up --authkey=$TAILSCALE_AUTHKEY
+        }
+        else {
+            Write-Host "Tailscale executable not found." -ForegroundColor Red
+        }
     }
 }
 else {
