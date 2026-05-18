@@ -134,15 +134,24 @@ if (Get-Service Tailscale -ErrorAction SilentlyContinue) {
     Start-Sleep -Seconds 5
 
     try {
-    tailscale up --authkey=$TAILSCALE_AUTHKEY -ErrorAction Stop
+        # Removed -ErrorAction and updated the flag to match Tailscale's syntax
+        tailscale up --auth-key $TAILSCALE_AUTHKEY
+        
+        # Check if the native command failed
+        if ($LASTEXITCODE -ne 0) {
+            throw "Tailscale up failed with exit code $LASTEXITCODE"
+        }
     }
     catch {
         Write-Host "tailscale command failed, trying direct executable..." -ForegroundColor Yellow
-    
+        
         $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
-    
+        
         if (Test-Path $ts) {
-            & $ts up --authkey=$TAILSCALE_AUTHKEY
+            & $ts up --auth-key $TAILSCALE_AUTHKEY
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "Tailscale executable failed to authenticate." -ForegroundColor Red
+            }
         }
         else {
             Write-Host "Tailscale executable not found." -ForegroundColor Red
